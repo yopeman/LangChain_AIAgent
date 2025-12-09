@@ -1,0 +1,13 @@
+{
+    "content": "GraphQL is a query language for APIs that allows for more flexible and efficient data retrieval. It was developed by Facebook and is now maintained by the GraphQL Foundation. GraphQL allows clients to specify exactly what data they need, reducing the amount of data that needs to be transferred and improving performance.",
+    "project_links": [
+        "https://github.com/graphql/graphql-js"
+    ],
+    "reference_links": [
+        "https://graphql.org/"
+    ],
+    "title": "Learning GraphQL",
+    "youtube_video_links": [
+        "https://www.youtube.com/watch?v=eIRHE3zs6Y0"
+    ]
+}
