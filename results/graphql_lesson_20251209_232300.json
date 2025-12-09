@@ -1,0 +1,17 @@
+{
+    "title": "Learn GraphQL",
+    "content": "## Introduction to GraphQL\nGraphQL is a query language for APIs that allows for more flexible and efficient data retrieval. It was developed by Facebook and is now maintained by the GraphQL Foundation.\n\n## Core Concepts\n### Queries\nQueries are used to retrieve data from a GraphQL API. They are similar to GET requests in REST APIs, but allow for more flexibility and specificity.\n\n### Mutations\nMutations are used to modify data on a GraphQL API. They are similar to POST, PUT, and DELETE requests in REST APIs, but allow for more flexibility and specificity.\n\n### Schemas\nSchemas define the structure of a GraphQL API. They specify the types of data that can be queried and mutated, as well as the relationships between them.\n\n### Resolvers\nResolvers are functions that are responsible for fetching the data for a particular field in a GraphQL query. They can be used to implement business logic and interact with databases or other APIs.\n\n## Comparison with REST API\nGraphQL and REST APIs have different approaches to data retrieval and manipulation. GraphQL allows for more flexibility and specificity, while REST APIs are more rigid and follow a fixed structure.\n\n## Practical Examples\nHere is an example of a simple GraphQL query:\n```graphql\nquery {\n  user(id: 1) {\n    name\n    email\n  }\n}\n```\nAnd here is an example of a simple GraphQL mutation:\n```graphql\nmutation {\n  createUser(name: \"John Doe\", email: \"johndoe@example.com\") {\n    id\n    name\n    email\n  }\n}\n```\n\n## Best Practices\n* Use meaningful and descriptive names for types, fields, and resolvers.\n* Use pagination and filtering to limit the amount of data returned.\n* Use caching to improve performance.\n* Use authentication and authorization to control access to data.\n\n## Reference from Official Documentation\n* [GraphQL Official Documentation](https://graphql.org/learn/)\n\n## Project Links from GitHub\n* [GraphQL GitHub Repository](https://github.com/graphql/graphql-spec)\n* [Apollo Server GitHub Repository](https://github.com/apollo-server/apollo-server)\n\n## Example Videos from YouTube\n* [GraphQL Tutorial by Traversy Media](https://www.youtube.com/watch?v=ed8SzALpxq8)\n* [GraphQL Crash Course by freeCodeCamp](https://www.youtube.com/watch?v=ZWwEtfMKxno)",
+    "reference_links": [
+        "https://graphql.org/learn/"
+    ],
+    "project_links": [
+        "https://github.com/graphql/graphql-spec",
+        "https://github.com/apollo-server/apollo-server"
+    ],
+    "youtube_video_links": [
+        "https://www.youtube.com/watch?v=ed8SzALpxq8",
+        "https://www.youtube.com/watch?v=ZWwEtfMKxno"
+    ],
+    "generated_at": "2024-09-16T14:30:00Z",
+    "query": "\n    Learn me GraphQL in markdown format including:\n    - Core concepts (queries, mutations, schemas, resolvers)\n    - Comparison with REST API\n    - Practical examples\n    - Best practices\n    - And provide:\n      * Reference from official documentation\n      * Project links from GitHub\n      * Example videos from YouTube\n    "
+}
