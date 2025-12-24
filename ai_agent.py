@@ -18,7 +18,7 @@ class AIAgent:
         self,
         *,
         llm: BaseChatModel,
-        tools: List[BaseTool],
+        tools: List[BaseTool] = [],
         response_format: Optional[type[BaseModel]] = None,  # Changed to type hint
         system_prompt: Optional[str] = None
     ):
