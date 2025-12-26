@@ -10,7 +10,7 @@ from langchain_core.exceptions import LangChainException
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools import BaseTool
-from langchain.agents import AgentExecutor
+from langchain_classic.agents import AgentExecutor
 from pydantic import BaseModel, ValidationError
 
 logging.basicConfig(level=logging.INFO)
@@ -57,18 +57,6 @@ class AIAgent:
                 response_format=response_format,
                 system_prompt=system_prompt,
             )
-            
-            # Wrap with AgentExecutor for better control
-            if hasattr(self.agent, '_executor'):
-                self.agent_executor = self.agent._executor
-            else:
-                self.agent_executor = AgentExecutor(
-                    agent=self.agent,
-                    tools=self.tools,
-                    max_iterations=max_iterations,
-                    handle_parsing_errors=handle_parsing_errors,
-                    verbose=verbose,
-                )
         except Exception as e:
             logger.error(f"Failed to initialize agent: {e}")
             raise
@@ -97,12 +85,7 @@ class AIAgent:
             # Prepare input with messages
             input_data = {"messages": [{"role": "user", "content": user_input}]}
             input_data.update(kwargs)
-            
-            # Use AgentExecutor if available, otherwise use base agent
-            if hasattr(self, 'agent_executor'):
-                result = self.agent_executor.invoke(input_data)
-            else:
-                result = self.agent.invoke(input_data)
+            result = self.agent.invoke(input_data)
                 
             return self._parse_output(result)
         except ValidationError as e:
@@ -123,11 +106,7 @@ class AIAgent:
         try:
             input_data = {"messages": [{"role": "user", "content": user_input}]}
             input_data.update(kwargs)
-            
-            if hasattr(self, 'agent_executor'):
-                result = await self.agent_executor.ainvoke(input_data)
-            else:
-                result = await self.agent.ainvoke(input_data)
+            result = await self.agent.ainvoke(input_data)
                 
             return self._parse_output(result)
         except ValidationError as e:
@@ -154,10 +133,7 @@ class AIAgent:
             input_data = {"messages": [{"role": "user", "content": user_input}]}
             input_data.update(kwargs)
             
-            if hasattr(self, 'agent_executor'):
-                return self.agent_executor.stream(input_data)
-            else:
-                return self.agent.stream(input_data)
+            return self.agent.stream(input_data)
         except Exception as e:
             logger.error(f"Streaming failed: {str(e)}", exc_info=True)
             raise RuntimeError(f"Streaming failed: {str(e)}") from e
@@ -172,10 +148,7 @@ class AIAgent:
             input_data = {"messages": [{"role": "user", "content": user_input}]}
             input_data.update(kwargs)
             
-            if hasattr(self, 'agent_executor'):
-                async for chunk in self.agent_executor.astream(input_data):
-                    yield chunk
-            elif hasattr(self.agent, 'astream'):
+            if hasattr(self.agent, 'astream'):
                 async for chunk in self.agent.astream(input_data):
                     yield chunk
             else:
@@ -518,3 +491,5 @@ IMPROVED PROMPT:"""
         except Exception as e:
             logger.error(f"Unexpected error in improve_prompt: {e}")
             return prompt  # Fallback to original prompt
+
+
