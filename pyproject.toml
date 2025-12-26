@@ -13,4 +13,6 @@ dependencies = [
     "pydantic[email]>=2.12.5",
     "python-dotenv>=1.2.1",
     "rich>=14.2.0",
+    "langchain-core>=1.2.5",
+    "langchain-openai>=1.1.6",
 ]

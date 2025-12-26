@@ -1,496 +1,449 @@
+"""
+Improved AIAgent for LangChain-style CompiledStateGraph + BaseChatModel.
+
+invoke(...) and ainvoke(...) return Union[str, BaseModel] (pydantic instance when
+`response_format` is provided and parsing succeeds, otherwise a plain string).
+
+This implementation:
+- Consolidates imports and logging setup
+- Accepts an llm implementing invoke/ainvoke (best-effort support for variations)
+- Robustly extracts text from many possible result shapes
+- Attempts JSON extraction then pydantic parsing (compatible with pydantic v1 & v2)
+- Provides helpful logging and does not crash on unexpected shapes
+"""
+
 import logging
 import json
 import re
-from typing import Any, Dict, List, Optional, Union, Iterator, AsyncIterator, Type
-from contextlib import contextmanager
-import warnings
+from typing import Any, Dict, List, Optional, Type, Union, Coroutine
 
-from langchain.agents import create_agent
-from langchain_core.exceptions import LangChainException
-from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.tools import BaseTool
-from langchain_classic.agents import AgentExecutor
 from pydantic import BaseModel, ValidationError
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# LangChain-ish imports (keep as-is if using langchain-core)
+from langchain.agents import create_agent
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.tools import BaseTool
+from langchain_core.messages import HumanMessage, SystemMessage
 
+# One logging configuration at module import
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    logging.basicConfig(level=logging.INFO)
+
+
+ResultLike = Dict[str, Any]
 
 
 class AIAgent:
     """
-    A robust agent class with proper output parsing and error handling.
-
-    Args:
-        llm: The language model to use as the agent's reasoning engine.
-        tools: List of tools the agent can use to take actions.
-        response_format: Optional Pydantic model class for structured output.
-        system_prompt: Optional system prompt to shape the agent's behavior.
-        max_iterations: Maximum number of agent steps before stopping.
-        handle_parsing_errors: Whether to gracefully handle parsing errors.
+    A robust wrapper around a LangChain CompiledStateGraph produced by create_agent.
+    - `llm`: either an instance of BaseChatModel (preferred) or a string placeholder
+             (if you plan to resolve it before calling methods).
+    - `tools`: list of BaseTool instances to pass to create_agent
+    - `system_prompt`: global system prompt used when creating the agent
+    - `response_format`: Optional pydantic BaseModel subclass to coerce structured output into
     """
 
     def __init__(
         self,
         *,
-        llm: BaseChatModel,
-        tools: List[BaseTool] = None,
+        llm: Union[str, BaseChatModel],
+        tools: Optional[List[BaseTool]] = None,
+        system_prompt: Optional[str] = "You are a helpful AI assistant.",
         response_format: Optional[Type[BaseModel]] = None,
-        system_prompt: Optional[str] = None,
-        max_iterations: int = 15,
-        handle_parsing_errors: bool = True,
-        verbose: bool = False,
+        debug: bool = False,
     ):
         self.llm = llm
         self.tools = tools or []
-        self.response_format = response_format
         self.system_prompt = system_prompt
-        self.max_iterations = max_iterations
-        self.handle_parsing_errors = handle_parsing_errors
-        self.verbose = verbose
-        
-        # Create the agent with proper configuration
+        self.response_format = response_format
+        self.debug = debug
+
+        # Lazily created graph, so we can defer heavy initialization if desired
+        self.graph = self._initialize_agent()
+
+    def _initialize_agent(self):
+        """Create the CompiledStateGraph using create_agent (wrap errors)."""
         try:
-            self.agent = create_agent(
-                model=llm,
+            return create_agent(
+                model=self.llm,
                 tools=self.tools,
-                response_format=response_format,
-                system_prompt=system_prompt,
+                system_prompt=self.system_prompt,
+                response_format=self.response_format,
+                debug=self.debug,
             )
         except Exception as e:
-            logger.error(f"Failed to initialize agent: {e}")
+            logger.exception("Failed to initialize agent graph")
             raise
 
-    def invoke(
-        self, 
-        user_input: str, 
-        **kwargs: Any
-    ) -> Union[BaseModel, Dict[str, Any], str]:
+    # ----------------------
+    # Public invoke / ainvoke
+    # ----------------------
+    def invoke(self, user_input: str, **kwargs: Any) -> Union[str, BaseModel]:
         """
-        Invoke the agent with a user input.
-
-        Args:
-            user_input: The user's message content.
-            **kwargs: Additional arguments to pass to the agent.
-
-        Returns:
-            If response_format is set, returns validated Pydantic model.
-            Otherwise returns the agent's response.
-            
-        Raises:
-            RuntimeError: If agent invocation fails.
-            ValidationError: If response parsing fails.
+        Synchronous invocation of the compiled agent graph.
+        Returns either a plain string or a pydantic model instance (if response_format provided).
         """
         try:
-            # Prepare input with messages
-            input_data = {"messages": [{"role": "user", "content": user_input}]}
-            input_data.update(kwargs)
-            result = self.agent.invoke(input_data)
-                
-            return self._parse_output(result)
-        except ValidationError as e:
-            if self.handle_parsing_errors:
-                logger.warning(f"Validation error: {e}. Returning raw output.")
-                return {"error": str(e), "raw_output": result if 'result' in locals() else None}
-            raise
+            inputs = {"messages": [{"role": "user", "content": user_input}]}
+            raw = self.graph.invoke(inputs, **kwargs)
+            text_or_model = self._process_result(raw)
+            return text_or_model
         except Exception as e:
-            logger.error(f"Agent invocation failed: {str(e)}", exc_info=True)
-            raise RuntimeError(f"Agent invocation failed: {str(e)}") from e
+            logger.exception("Graph invocation error")
+            # Keep return type stable: str on error
+            return f"Error: {str(e)}"
 
-    async def ainvoke(
-        self, 
-        user_input: str, 
-        **kwargs: Any
-    ) -> Union[BaseModel, Dict[str, Any], str]:
-        """Async version of invoke for concurrent operations."""
+    async def ainvoke(self, user_input: str, **kwargs: Any) -> Union[str, BaseModel]:
+        """
+        Asynchronous invocation of the compiled agent graph.
+        """
         try:
-            input_data = {"messages": [{"role": "user", "content": user_input}]}
-            input_data.update(kwargs)
-            result = await self.agent.ainvoke(input_data)
-                
-            return self._parse_output(result)
-        except ValidationError as e:
-            if self.handle_parsing_errors:
-                logger.warning(f"Validation error: {e}. Returning raw output.")
-                return {"error": str(e), "raw_output": result if 'result' in locals() else None}
-            raise
+            inputs = {"messages": [{"role": "user", "content": user_input}]}
+            raw = await self.graph.ainvoke(inputs, **kwargs)
+            text_or_model = self._process_result(raw)
+            return text_or_model
         except Exception as e:
-            logger.error(f"Async agent invocation failed: {str(e)}", exc_info=True)
-            raise RuntimeError(f"Async agent invocation failed: {str(e)}") from e
+            logger.exception("Async graph invocation error")
+            return f"Error: {str(e)}"
 
-    def stream(
-        self, 
-        user_input: str, 
-        **kwargs: Any
-    ) -> Iterator[Dict[str, Any]]:
-        """
-        Stream the agent's response tokens and steps.
-
-        Returns:
-            Generator yielding streaming chunks.
-        """
-        try:
-            input_data = {"messages": [{"role": "user", "content": user_input}]}
-            input_data.update(kwargs)
-            
-            return self.agent.stream(input_data)
-        except Exception as e:
-            logger.error(f"Streaming failed: {str(e)}", exc_info=True)
-            raise RuntimeError(f"Streaming failed: {str(e)}") from e
-
-    async def astream(
-        self, 
-        user_input: str, 
-        **kwargs: Any
-    ) -> AsyncIterator[Dict[str, Any]]:
-        """Async version of stream."""
-        try:
-            input_data = {"messages": [{"role": "user", "content": user_input}]}
-            input_data.update(kwargs)
-            
-            if hasattr(self.agent, 'astream'):
-                async for chunk in self.agent.astream(input_data):
-                    yield chunk
-            else:
-                raise NotImplementedError("Async streaming not supported by this agent")
-        except Exception as e:
-            logger.error(f"Async streaming failed: {str(e)}", exc_info=True)
-            raise RuntimeError(f"Async streaming failed: {str(e)}") from e
-
-    def _parse_output(
-        self, 
-        result: Dict[str, Any]
-    ) -> Union[BaseModel, Dict[str, Any], str]:
-        """
-        Parse the agent output with robust error handling.
-
-        Args:
-            result: Raw agent output dictionary.
-
-        Returns:
-            Parsed output based on response_format configuration.
-        """
-        # If no response_format specified, extract content or return full result
-        if self.response_format is None:
-            return self._extract_content(result)
-        
-        # Try multiple strategies to extract structured data
-        structured_data = None
-        
-        # Strategy 1: Check for structured_response key
-        structured_data = result.get("structured_response")
-        
-        # Strategy 2: Check for output key
-        if structured_data is None:
-            structured_data = result.get("output")
-        
-        # Strategy 3: Check if result is the structured data
-        if structured_data is None and isinstance(result, dict):
-            # Check if it looks like a structured response (not containing agent metadata)
-            agent_keys = {"messages", "output", "intermediate_steps", "input", "response_metadata"}
-            if not any(key in result for key in agent_keys):
-                structured_data = result
-        
-        # Strategy 4: Extract from last message content
-        if structured_data is None:
-            messages = result.get("messages", [])
-            if messages:
-                last_msg = messages[-1]
-                if hasattr(last_msg, 'content'):
-                    structured_data = self._extract_from_content(last_msg.content)
-                elif isinstance(last_msg, dict) and 'content' in last_msg:
-                    structured_data = self._extract_from_content(last_msg['content'])
-        
-        # Validate and create the response model
-        if structured_data is not None:
-            try:
-                return self._validate_and_create_model(structured_data)
-            except ValidationError as e:
-                if self.handle_parsing_errors:
-                    warnings.warn(
-                        f"Failed to parse response as {self.response_format.__name__}: {e}. "
-                        f"Returning structured_data as is."
-                    )
-                    return structured_data
-                raise
-            except Exception as e:
-                if self.handle_parsing_errors:
-                    warnings.warn(f"Unexpected parsing error: {e}")
-                    return self._extract_content(result)
-                raise
-        
-        # Fallback to extracting content
-        return self._extract_content(result)
-
-    def _extract_content(self, result: Any) -> Union[Dict[str, Any], str]:
-        """Extract content from various result formats."""
-        if isinstance(result, dict):
-            # Try to get output or content
-            if "output" in result:
-                return result["output"]
-            elif "content" in result:
-                return result["content"]
-            elif "messages" in result and result["messages"]:
-                last_msg = result["messages"][-1]
-                if hasattr(last_msg, 'content'):
-                    return last_msg.content
-                elif isinstance(last_msg, dict) and 'content' in last_msg:
-                    return last_msg['content']
-            return result
-        elif hasattr(result, 'content'):
-            return result.content
-        elif hasattr(result, 'text'):
-            return result.text
-        elif isinstance(result, (str, int, float, bool)):
-            return result
-        else:
-            return str(result)
-
-    def _extract_from_content(self, content: str) -> Union[Dict, str]:
-        """Extract structured data from text content."""
-        # Try to parse as JSON
-        try:
-            # Look for JSON blocks (including nested)
-            json_pattern = r'(\{.*\}|\{.*\{.*\}.*\})'
-            matches = re.findall(json_pattern, content, re.DOTALL)
-            
-            for match in matches:
-                try:
-                    return json.loads(match)
-                except json.JSONDecodeError:
-                    continue
-            
-            # Try parsing entire content as JSON
-            return json.loads(content.strip())
-        except json.JSONDecodeError:
-            # If not JSON, return as text
-            return content
-
-    def _validate_and_create_model(self, data: Any) -> BaseModel:
-        """Create and validate the response model instance."""
-        if self.response_format is None:
-            raise ValueError("No response_format specified")
-        
-        if isinstance(data, self.response_format):
-            return data
-        
-        try:
-            if isinstance(data, dict):
-                # Handle Pydantic v1/v2 compatibility
-                if hasattr(self.response_format, "model_validate"):
-                    return self.response_format.model_validate(data)
-                else:
-                    return self.response_format.parse_obj(data)
-            elif isinstance(data, str):
-                # Try to parse string as JSON first
-                try:
-                    parsed = json.loads(data)
-                    return self._validate_and_create_model(parsed)
-                except json.JSONDecodeError:
-                    # If string is not JSON, pass as single argument
-                    return self.response_format(data)
-            else:
-                # Try to create model with the data
-                return self.response_format(data)
-        except ValidationError:
-            raise
-        except Exception as e:
-            raise ValidationError(f"Failed to create model instance: {e}")
-
-    # Context manager for temporary configuration changes
-    @contextmanager
-    def temporary_config(self, **config):
-        """Temporarily modify agent configuration."""
-        original_config = {}
-        
-        for key, value in config.items():
-            if hasattr(self, key):
-                original_config[key] = getattr(self, key)
-                setattr(self, key, value)
-        
-        try:
-            yield self
-        finally:
-            for key, value in original_config.items():
-                setattr(self, key, value)
-
-    # Additional utility methods
-
-    def get_tool_names(self) -> List[str]:
-        """Get list of available tool names."""
-        if hasattr(self.agent, 'tools'):
-            tools = self.agent.tools
-        elif hasattr(self, 'tools'):
-            tools = self.tools
-        else:
-            return []
-        
-        return [tool.name for tool in tools if hasattr(tool, "name")]
-
-    def get_tool_descriptions(self) -> Dict[str, str]:
-        """Get tool names with their descriptions."""
-        descriptions = {}
-        for tool in self.tools:
-            if hasattr(tool, 'name') and hasattr(tool, 'description'):
-                descriptions[tool.name] = tool.description
-        return descriptions
-
-    def get_agent_info(self) -> Dict[str, Any]:
-        """Get information about the agent configuration."""
-        return {
-            "model_type": self.llm.__class__.__name__,
-            "has_response_format": self.response_format is not None,
-            "response_format_type": (
-                self.response_format.__name__ if self.response_format else None
-            ),
-            "system_prompt_length": (
-                len(self.system_prompt) if self.system_prompt else 0
-            ),
-            "tools_count": len(self.tools),
-            "tool_names": self.get_tool_names(),
-            "max_iterations": self.max_iterations,
-            "verbose": self.verbose,
-        }
-
-    def batch_invoke(
-        self, 
-        user_inputs: List[str], 
-        **kwargs: Any
-    ) -> List[Union[BaseModel, Dict[str, Any], str]]:
-        """
-        Process multiple inputs in sequence.
-        
-        Note: For true parallel processing, use asyncio.gather with ainvoke.
-        """
-        results = []
-        for input_text in user_inputs:
-            results.append(self.invoke(input_text, **kwargs))
-        return results
-
-    def improve_prompt(
-        self,
-        prompt: str,
-        context: Optional[str] = None,
-        target_audience: Optional[str] = None,
-        expected_output: Optional[str] = None,
-        improvement_guidelines: Optional[Dict[str, bool]] = None,
-        **kwargs: Any
-    ) -> str:
-        """
-        Improve a prompt for better responses from Generative AI models.
-
-        Args:
-            prompt: The original prompt to improve
-            context: Additional context about the use case
-            target_audience: Who will be using this prompt
-            expected_output: Description of the desired output format or content
-            improvement_guidelines: Dictionary of improvement criteria to focus on
-            **kwargs: Additional arguments to pass to the LLM
-
-        Returns:
-            Improved prompt string
-        """
-        # Default improvement guidelines
-        if improvement_guidelines is None:
-            improvement_guidelines = {
-                "clarity": True,
-                "specificity": True,
-                "context_provision": True,
-                "role_definition": True,
-                "output_format": True,
-                "constraints": True,
-                "examples": False,
-                "step_by_step": False,
-            }
-
-        # Build guidelines text
-        guidelines_list = []
-        guideline_descriptions = {
-            "clarity": "Ensure the prompt is clear and unambiguous",
-            "specificity": "Make the prompt specific and detailed",
-            "context_provision": "Provide necessary context for the task",
-            "role_definition": "Define the AI's role or perspective",
-            "output_format": "Specify desired output format or structure",
-            "constraints": "Include any constraints or limitations",
-            "examples": "Include example inputs and outputs",
-            "step_by_step": "Break down complex tasks into steps",
-        }
-        
-        for guideline, enabled in improvement_guidelines.items():
-            if enabled and guideline in guideline_descriptions:
-                guidelines_list.append(f"- {guideline_descriptions[guideline]}")
-
-        guidelines_text = "\n".join(guidelines_list) if guidelines_list else "No specific guidelines provided."
-
-        # Create a structured prompt template
-        system_template = """You are an expert prompt engineer specialized in optimizing prompts for Large Language Models. Your task is to analyze and improve the given prompt based on specific guidelines.
-
-IMPORTANT INSTRUCTIONS:
-1. Your output should ONLY contain the improved prompt, nothing else
-2. Do not include explanations, commentary, or markdown formatting
-3. Do not wrap the prompt in quotes or special characters
-4. Maintain the original intent while enhancing effectiveness
-5. If the original prompt is already optimal, return it with minimal changes
-6. Keep the improved prompt concise but complete"""
-
-        human_template = """ORIGINAL PROMPT TO IMPROVE:
-{prompt}
-
-{context_section}{audience_section}{output_section}
-IMPROVEMENT GUIDELINES:
-{guidelines}
-
-IMPROVED PROMPT:"""
-
-        # Prepare optional sections
-        context_section = f"CONTEXT:\n{context}\n\n" if context else ""
-        audience_section = (
-            f"TARGET AUDIENCE:\n{target_audience}\n\n" if target_audience else ""
-        )
-        output_section = (
-            f"EXPECTED OUTPUT:\n{expected_output}\n\n" if expected_output else ""
-        )
+    # ----------------------
+    # Prompt improvement helpers
+    # ----------------------
+    def improve(self, prompt: str, **kwargs: Any) -> str:
+        """Ask the LLM to improve a prompt (sync). Returns the improved prompt as string."""
+        system_msg = "You are an expert prompt engineer. Enhance the prompt for clarity and detail."
+        user_msg = f"Improve this prompt: {prompt}"
 
         try:
-            # Create chat prompt with system and human messages
-            prompt_template = ChatPromptTemplate.from_messages(
-                [("system", system_template), ("human", human_template)]
-            )
-
-            # Format the prompt
-            formatted_prompt = prompt_template.format(
-                prompt=prompt,
-                context_section=context_section,
-                audience_section=audience_section,
-                output_section=output_section,
-                guidelines=guidelines_text,
-            )
-
-            # Invoke the LLM with additional kwargs
-            invoke_kwargs = {"messages": [{"role": "user", "content": formatted_prompt}]}
-            invoke_kwargs.update(kwargs)
-            
-            result = self.llm.invoke(**invoke_kwargs)
-
-            # Extract content safely
-            response = self._extract_content(result)
-            
-            if isinstance(response, dict):
-                response = str(response)
-            
-            # Validate the response isn't empty
-            if not response or response.isspace():
-                logger.warning("LLM returned empty response. Returning original prompt.")
-                return prompt
-
+            response = self._call_llm_sync([SystemMessage(content=system_msg), HumanMessage(content=user_msg)])
             return response.strip()
+        except Exception:
+            logger.exception("Improve prompt failed")
+            return prompt
 
-        except LangChainException as e:
-            logger.error(f"LangChain error: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error in improve_prompt: {e}")
-            return prompt  # Fallback to original prompt
+    async def aimprove(self, prompt: str, **kwargs: Any) -> str:
+        """Async version of improve()."""
+        system_msg = "You are an expert prompt engineer. Enhance the prompt for clarity and detail."
+        user_msg = f"Improve this prompt: {prompt}"
 
+        try:
+            response = await self._call_llm_async([SystemMessage(content=system_msg), HumanMessage(content=user_msg)])
+            return response.strip()
+        except Exception:
+            logger.exception("Async improve prompt failed")
+            return prompt
+
+    # ----------------------
+    # Internal helpers
+    # ----------------------
+    def _process_result(self, raw: Any) -> Union[str, BaseModel]:
+        """
+        Normalizes a raw result returned from graph.invoke/ainvoke into:
+         - parsed pydantic model (if response_format provided and parsing succeeds)
+         - or a string
+        This function tolerates many shapes returned by different LangChain versions.
+        """
+        # If raw is a pydantic model already, return as-is
+        if isinstance(raw, BaseModel):
+            return raw
+
+        # If raw is a dict-like structure, try to find structured_response / output / messages
+        try:
+            if isinstance(raw, dict):
+                # Prefer explicit structured_response key if present
+                if "structured_response" in raw:
+                    structured = raw["structured_response"]
+                    return self._maybe_structure(structured)
+
+                # Common keys: "output", "final_output", "result", "text"
+                for key in ("output", "final_output", "result", "text"):
+                    if key in raw:
+                        return self._maybe_structure(raw[key])
+
+                # If messages exist, attempt to extract last message content
+                if "messages" in raw:
+                    messages = raw["messages"]
+                    text = self._extract_text_from_messages(messages)
+                    return self._maybe_structure(text)
+
+                # Some graphs return a list of events/steps; try to stringify
+                # or search for nested messages
+                # attempt to find any stringful values
+                candidate = self._find_first_stringish(raw)
+                if candidate is not None:
+                    return self._maybe_structure(candidate)
+
+                # fallback: stringified raw
+                return self._maybe_structure(json.dumps(raw, ensure_ascii=False))
+            # If raw is a list, try join of string-like elements
+            if isinstance(raw, list):
+                # try to find a first string-like
+                for item in raw[::-1]:
+                    if isinstance(item, (str,)):
+                        return self._maybe_structure(item)
+                    if isinstance(item, dict):
+                        cand = self._find_first_stringish(item)
+                        if cand:
+                            return self._maybe_structure(cand)
+                # fallback to json dump
+                return self._maybe_structure(json.dumps(raw, ensure_ascii=False))
+
+            # If raw is a plain string
+            if isinstance(raw, str):
+                return self._maybe_structure(raw)
+
+            # If raw has attribute 'content' (e.g., a message object)
+            if hasattr(raw, "content"):
+                return self._maybe_structure(getattr(raw, "content"))
+
+            # Unknown type: fallback to str()
+            return self._maybe_structure(str(raw))
+        except Exception:
+            logger.exception("Failed to process raw result")
+            return f"Error processing result: {str(raw)}"
+
+    def _maybe_structure(self, text_or_obj: Any) -> Union[str, BaseModel]:
+        """
+        If response_format is present, try to coerce text_or_obj into that model.
+        Accepts either raw text, a dict-like structure, or already parsed JSON objects.
+        On failure, returns the original text (string).
+        """
+        if not self.response_format:
+            return text_or_obj if isinstance(text_or_obj, str) else str(text_or_obj)
+
+        # If already a dict-like object, attempt to parse directly
+        if isinstance(text_or_obj, dict):
+            return self._coerce_to_model(text_or_obj)
+
+        # If already a BaseModel, return it
+        if isinstance(text_or_obj, BaseModel):
+            return text_or_obj
+
+        # If a non-empty string, try to extract JSON and parse, or try to parse full string as JSON
+        if isinstance(text_or_obj, str):
+            # 1) Try to load the entire string as JSON
+            s = text_or_obj.strip()
+            try:
+                parsed = json.loads(s)
+                return self._coerce_to_model(parsed)
+            except Exception:
+                # 2) Try to find the first JSON block in the string (practical)
+                match = re.search(r"(\{(?:.|\s)*\}|\[(?:.|\s)*\])", s, re.DOTALL)
+                if match:
+                    try:
+                        parsed = json.loads(match.group(1))
+                        return self._coerce_to_model(parsed)
+                    except Exception as e:
+                        logger.debug("JSON block found but failed to parse into model: %s", e)
+                # If parsing failed, return original text
+                return s
+
+        # Otherwise, cast to string
+        return str(text_or_obj)
+
+    def _coerce_to_model(self, data: Any) -> Union[str, BaseModel]:
+        """
+        Convert a dict/list to the configured pydantic response_format.
+        Accepts both pydantic v1 (parse_obj) and v2 (model_validate).
+        On validation error, return the original serialized JSON string.
+        """
+        try:
+            if hasattr(self.response_format, "model_validate"):
+                # pydantic v2
+                return self.response_format.model_validate(data)
+            # pydantic v1
+            return self.response_format.parse_obj(data)
+        except ValidationError as ve:
+            logger.warning("Response model validation failed: %s", ve)
+            # return the serialized JSON text if validation fails
+            try:
+                return json.dumps(data, ensure_ascii=False)
+            except Exception:
+                return str(data)
+        except Exception:
+            logger.exception("Unexpected error while coercing to pydantic model")
+            return str(data)
+
+    @staticmethod
+    def _extract_text_from_messages(messages: Any) -> str:
+        """
+        Accepts a sequence of messages where each item may be:
+          - a dict with {'role':..., 'content': ...}
+          - an object with .content attribute
+          - a plain string
+        Returns the last non-empty message content found (searches backwards).
+        """
+        try:
+            if isinstance(messages, str):
+                return messages
+            if not messages:
+                return ""
+            # support list-like
+            for item in reversed(messages):
+                if item is None:
+                    continue
+                if isinstance(item, str) and item.strip():
+                    return item
+                if isinstance(item, dict):
+                    # common keys
+                    for key in ("content", "text", "message", "output"):
+                        if key in item and item[key]:
+                            return str(item[key])
+                if hasattr(item, "content"):
+                    val = getattr(item, "content")
+                    if isinstance(val, str) and val.strip():
+                        return val
+                    # in some implementations .content may be a list/dict
+                    if not isinstance(val, str):
+                        try:
+                            return json.dumps(val, ensure_ascii=False)
+                        except Exception:
+                            return str(val)
+            return ""
+        except Exception:
+            logger.exception("Failed to extract text from messages")
+            return ""
+
+    @staticmethod
+    def _find_first_stringish(d: Dict[str, Any]) -> Optional[str]:
+        """
+        Walks a dict shallowly to find the first string-like leaf value.
+        """
+        try:
+            for k, v in d.items():
+                if isinstance(v, str) and v.strip():
+                    return v
+                if isinstance(v, (dict, list)):
+                    try:
+                        return json.dumps(v, ensure_ascii=False)
+                    except Exception:
+                        continue
+                if v is not None:
+                    return str(v)
+            return None
+        except Exception:
+            return None
+
+    # ----------------------
+    # LLM calling helpers for improve() function
+    # ----------------------
+    def _call_llm_sync(self, messages: List[Any]) -> str:
+        """
+        Best-effort synchronous call to the provided llm instance.
+        Tries common method names and return shapes:
+          - llm.invoke(messages) -> object with .content or str
+          - llm.generate / llm.__call__ / llm.chat -> attempt sensible extraction
+        """
+        llm = self.llm
+        # Try invoke
+        try:
+            if hasattr(llm, "invoke") and callable(getattr(llm, "invoke")):
+                out = llm.invoke(messages)
+                return self._extract_from_llm_response(out)
+        except Exception:
+            logger.debug("llm.invoke failed", exc_info=True)
+
+        # Try call/generate/chat
+        for name in ("__call__", "generate", "chat", "complete"):
+            fn = getattr(llm, name, None)
+            if callable(fn):
+                try:
+                    out = fn(messages)
+                    return self._extract_from_llm_response(out)
+                except Exception:
+                    logger.debug("llm.%s failed", name, exc_info=True)
+        raise RuntimeError("No supported synchronous call found on llm")
+
+    async def _call_llm_async(self, messages: List[Any]) -> str:
+        """
+        Best-effort async call to the provided llm instance.
+        Looks for .ainvoke, .agenerate, or awaits a coroutine from __call__.
+        """
+        llm = self.llm
+        # Try ainvoke
+        try:
+            if hasattr(llm, "ainvoke") and callable(getattr(llm, "ainvoke")):
+                out = await llm.ainvoke(messages)
+                return self._extract_from_llm_response(out)
+        except Exception:
+            logger.debug("llm.ainvoke failed", exc_info=True)
+
+        # Try async generate / __call__
+        for name in ("agenerate", "__call__"):
+            fn = getattr(llm, name, None)
+            if callable(fn):
+                try:
+                    maybe_coro = fn(messages)
+                    if isinstance(maybe_coro, Coroutine):
+                        out = await maybe_coro
+                        return self._extract_from_llm_response(out)
+                    # If it returned a sync result, handle it
+                    return self._extract_from_llm_response(maybe_coro)
+                except Exception:
+                    logger.debug("llm.%s failed", name, exc_info=True)
+        raise RuntimeError("No supported async call found on llm")
+
+    @staticmethod
+    def _extract_from_llm_response(resp: Any) -> str:
+        """
+        Normalize typical LLM return shapes into a single text string.
+        Accepts objects with .content, dicts with 'content'/'text', lists, or plain strings.
+        """
+        if resp is None:
+            return ""
+        if isinstance(resp, str):
+            return resp
+        if isinstance(resp, BaseModel):
+            # Some LLM wrappers return pydantic BaseModel responses
+            if hasattr(resp, "content"):
+                return getattr(resp, "content")
+            return str(resp.json() if hasattr(resp, "json") else resp)
+
+        # dict-like
+        if isinstance(resp, dict):
+            # common keys
+            for key in ("content", "text", "message", "output"):
+                if key in resp:
+                    return str(resp[key])
+            # sometimes 'generations' or 'choices'
+            for key in ("generations", "choices"):
+                if key in resp:
+                    val = resp[key]
+                    # choices/generations may be a list of objects/dicts
+                    if isinstance(val, list) and val:
+                        first = val[0]
+                        if isinstance(first, dict):
+                            for k in ("text", "message", "content"):
+                                if k in first:
+                                    return str(first[k])
+                        if hasattr(first, "text"):
+                            return str(getattr(first, "text"))
+            # fallback to JSON
+            try:
+                return json.dumps(resp, ensure_ascii=False)
+            except Exception:
+                return str(resp)
+
+        # list-like
+        if isinstance(resp, list):
+            # pick last stringish element
+            for item in reversed(resp):
+                if isinstance(item, str):
+                    return item
+                if isinstance(item, dict):
+                    for k in ("content", "text"):
+                        if k in item:
+                            return item[k]
+                if hasattr(item, "content"):
+                    return getattr(item, "content")
+            return json.dumps(resp, ensure_ascii=False)
+
+        # generic object with .content or .text
+        if hasattr(resp, "content"):
+            return getattr(resp, "content")
+        if hasattr(resp, "text"):
+            return getattr(resp, "text")
+        # fallback
+        return str(resp)
 
