@@ -1,0 +1,17 @@
+{
+    "title": "Learn GraphQL",
+    "content": "## Introduction to GraphQL\nGraphQL is a query language for APIs that allows for more flexible and efficient data retrieval. It was developed by Facebook and is now maintained by the GraphQL Foundation.\n\n## Core Concepts\n### Queries\nQueries are used to retrieve data from a GraphQL API. They are similar to GET requests in REST APIs.\n```graphql\nquery {\n  user(id: 1) {\n    name\n    email\n  }\n}\n```\n### Mutations\nMutations are used to modify data in a GraphQL API. They are similar to POST, PUT, and DELETE requests in REST APIs.\n```graphql\nmutation {\n  createUser(name: \"John Doe\", email: \"john@example.com\") {\n    id\n    name\n    email\n  }\n}\n```\n### Schemas\nSchemas define the structure of a GraphQL API. They are used to validate queries and mutations.\n```graphql\ntype User {\n  id: ID!\n  name: String!\n  email: String!\n}\n```\n### Resolvers\nResolvers are functions that are used to retrieve or modify data in a GraphQL API. They are called when a query or mutation is executed.\n```javascript\nconst resolvers = {\n  Query: {\n    user: (parent, { id }) => {\n      // Retrieve user data from database\n    }\n  }\n};\n\n## Comparison with REST API\nGraphQL and REST API are both used for building APIs, but they have some key differences:\n* GraphQL is a query language, while REST API is an architectural style.\n* GraphQL allows for more flexible and efficient data retrieval, while REST API is more rigid and requires multiple requests to retrieve related data.\n\n## Practical Examples\n* Retrieving a list of users: \n```graphql\nquery {\n  users {\n    id\n    name\n    email\n  }\n}\n```\n* Creating a new user: \n```graphql\nmutation {\n  createUser(name: \"John Doe\", email: \"john@example.com\") {\n    id\n    name\n    email\n  }\n}\n```\n\n## Best Practices\n* Use meaningful and descriptive names for queries, mutations, and types.\n* Use validation to ensure that queries and mutations are valid and secure.\n* Use caching to improve performance.\n\n## Reference from Official Documentation\n* [GraphQL Official Documentation](https://graphql.org/learn/)\n\n## Project Links from GitHub\n* [GraphQL GitHub Repository](https://github.com/graphql/graphql-spec)\n* [Apollo Server GitHub Repository](https://github.com/apollo-server/apollo-server)\n\n## Example Videos from YouTube\n* [GraphQL Tutorial by Traversy Media](https://www.youtube.com/watch?v=pe6Y7OGvBko)\n* [GraphQL Crash Course by freeCodeCamp](https://www.youtube.com/watch?v=ed8SzALqlt4)",
+    "reference_links": [
+        "https://graphql.org/learn/"
+    ],
+    "project_links": [
+        "https://github.com/graphql/graphql-spec",
+        "https://github.com/apollo-server/apollo-server"
+    ],
+    "youtube_video_links": [
+        "https://www.youtube.com/watch?v=pe6Y7OGvBko",
+        "https://www.youtube.com/watch?v=ed8SzALqlt4"
+    ],
+    "generated_at": "2024-09-16T14:30:00Z",
+    "query": "\n    Learn me GraphQL in markdown format including:\n    - Core concepts (queries, mutations, schemas, resolvers)\n    - Comparison with REST API\n    - Practical examples\n    - Best practices\n    - And provide:\n      * Reference from official documentation\n      * Project links from GitHub\n      * Example videos from YouTube\n    "
+}

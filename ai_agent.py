@@ -17,6 +17,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+
 class AIAgent:
     """
     A robust agent class with proper output parsing and error handling.
@@ -163,7 +164,7 @@ class AIAgent:
     ) -> Union[BaseModel, Dict[str, Any], str]:
         """
         Parse the agent output with robust error handling.
-        
+
         Args:
             result: Raw agent output dictionary.
 
