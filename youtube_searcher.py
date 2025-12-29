@@ -52,31 +52,21 @@ class ResponseOutput(BaseModel):
 # YouTube Tool
 # =========================
 @tool
-def youtube_search_tool(query: str, max_results: int = 5) -> List[YouTubeVideo]:
+def search_youtube_video(search_terms: str, max_results=5, retries=3):
     """
-    Search YouTube for educational videos and return structured results.
+    Search YouTube video for educational videos and return results.
     """
-    results = YoutubeSearch(
-        search_terms=query,
-        max_results=max_results
+
+    videos = YoutubeSearch(
+        search_terms=search_terms, 
+        max_results=max_results, 
+        retries=retries
     ).to_dict(clear_cache=True)
 
-    videos: List[YouTubeVideo] = []
-
-    for r in results:
-        video_id = r.get("id")
-        videos.append(
-            YouTubeVideo(
-                title=r.get("title", ""),
-                description=r.get("long_desc", "") or r.get("description", ""),
-                link="https://www.youtube.com" + r.get("url_suffix", ""),
-                thumbnails=[
-                    f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
-                ] if video_id else [],
-            )
-        )
-
+    for video in videos:
+        video["full_url"] = "https://www.youtube.com" + video["url_suffix"]
     return videos
+
 
 # =========================
 # LLM
@@ -90,7 +80,7 @@ llm = ChatGroq(
 # Tools
 # =========================
 tools = [
-    youtube_search_tool,
+    search_youtube_video,
     TavilySearch(max_results=5),
 ]
 
