@@ -17,14 +17,13 @@ from langchain_classic.globals import set_llm_cache
 from langchain_classic.cache import InMemoryCache
 from diskcache import Disk, Cache
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from ai_agent import AIAgent
+import json
 
 # =========================
 # Enable LLM Cache
 # =========================
-# Disk("./disc_files")
-# Cache("")
-# InMemoryCache()
 set_llm_cache(Cache("./disc_cache_files"))
 
 # =========================
@@ -93,7 +92,7 @@ You are YopeAI, a professional educator.
 Your responsibilities:
 1. Explain the topic clearly and concisely.
 2. Use tools when appropriate:
-   - Use youtube_search_tool for tutorials or demos.
+   - Use search_youtube_video for tutorials or demos.
    - Use TavilySearch for articles and documentation.
 3. Never hallucinate links.
 4. Prefer official or reputable sources.
@@ -119,10 +118,20 @@ agent = AIAgent(
 # Fast API
 # =========================
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],        # Allow all origins
+    allow_credentials=True,
+    allow_methods=["*"],        # Allow all HTTP methods
+    allow_headers=["*"],        # Allow all headers
+)
+
 @app.get("/")
 def ask_ai(query):
     if query == '':
         return 'Empty query'
+    # return json.loads("""{"explain":"LangChain is an open-source framework for building applications that utilize large language models. It provides a set of tools and libraries to help developers create custom AI-powered interfaces and workflows.","videos":[{"title":"LangChain Tutorial","description":"A tutorial on how to use LangChain to build a custom AI-powered interface","link":"https://www.youtube.com/watch?v=dQw4w9WgXcQ","thumbnails":["https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"]}],"references":[{"title":"LangChain Documentation","description":"The official documentation for LangChain, including tutorials and API references","link":"https://langchain.dev/"}]}""")
     return agent.invoke(query)
 
 # =========================

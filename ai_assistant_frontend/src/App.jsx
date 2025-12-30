@@ -1,13 +1,137 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import './App.css'
 
 const API_URL = 'http://localhost:8000'
+
+// Utility function to extract YouTube video ID from URL
+const extractYouTubeVideoId = (url) => {
+  if (!url) return null
+  
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/,
+    /^([a-zA-Z0-9_-]{11})$/
+  ]
+  
+  for (const pattern of patterns) {
+    const match = url.match(pattern)
+    if (match) return match[1]
+  }
+  
+  return null
+}
+
+// VideoModal Component
+const VideoModal = ({ video, isOpen, onClose }) => {
+  const modalRef = useRef(null)
+  const closeButtonRef = useRef(null)
+
+  useEffect(() => {
+    if (isOpen) {
+      // Prevent body scroll when modal is open
+      document.body.style.overflow = 'hidden'
+      // Focus close button for accessibility
+      closeButtonRef.current?.focus()
+    } else {
+      document.body.style.overflow = ''
+    }
+
+    // Cleanup: restore scroll when component unmounts
+    return () => {
+      document.body.style.overflow = ''
+    }
+  }, [isOpen])
+
+  useEffect(() => {
+    const handleEscape = (e) => {
+      if (e.key === 'Escape' && isOpen) {
+        onClose()
+      }
+    }
+
+    if (isOpen) {
+      document.addEventListener('keydown', handleEscape)
+      return () => document.removeEventListener('keydown', handleEscape)
+    }
+  }, [isOpen, onClose])
+
+  const handleBackdropClick = (e) => {
+    if (e.target === modalRef.current) {
+      onClose()
+    }
+  }
+
+  if (!isOpen || !video) return null
+
+  const videoId = extractYouTubeVideoId(video.link)
+  const embedUrl = videoId 
+    ? `https://www.youtube.com/embed/${videoId}?autoplay=1`
+    : null
+
+  return (
+    <div 
+      className="modal-overlay" 
+      ref={modalRef}
+      onClick={handleBackdropClick}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="modal-title"
+    >
+      <div className="modal-content">
+        <button
+          ref={closeButtonRef}
+          className="modal-close"
+          onClick={onClose}
+          aria-label="Close modal"
+        >
+          ×
+        </button>
+        
+        {embedUrl ? (
+          <div className="modal-video-wrapper">
+            <iframe
+              src={embedUrl}
+              title={video.title || 'Video player'}
+              className="modal-video-iframe"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allowFullScreen
+            />
+          </div>
+        ) : (
+          <div className="modal-video-error">
+            <p>Unable to load video player</p>
+          </div>
+        )}
+
+        <div className="modal-footer">
+          <a
+            href={video.link}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="modal-youtube-link"
+            aria-label="Watch on YouTube"
+          >
+            <svg 
+              className="youtube-icon" 
+              viewBox="0 0 24 24" 
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+            </svg>
+            Watch on YouTube
+          </a>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function App() {
   const [query, setQuery] = useState('')
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [selectedVideo, setSelectedVideo] = useState(null)
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -39,7 +163,7 @@ function App() {
   return (
     <div className="app">
       <header className="header">
-        <h1>AI Assistant</h1>
+        <h1>YopeAI Assistant</h1>
       </header>
 
       <main className="main">
@@ -88,7 +212,20 @@ function App() {
                 <h2>Videos</h2>
                 <div className="videos-grid">
                   {data.videos.map((video, index) => (
-                    <div key={index} className="video-card">
+                    <div 
+                      key={index} 
+                      className="video-card"
+                      onClick={() => setSelectedVideo(video)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          setSelectedVideo(video)
+                        }
+                      }}
+                      aria-label={`Play video: ${video.title || 'Untitled'}`}
+                    >
                       {video.thumbnails && video.thumbnails.length > 0 && (
                         <img 
                           src={video.thumbnails[0]} 
@@ -101,18 +238,7 @@ function App() {
                       )}
                       <div className="video-content">
                         <h3 className="video-title">
-                          {video.link ? (
-                            <a 
-                              href={video.link} 
-                              target="_blank" 
-                              rel="noopener noreferrer"
-                              className="video-link"
-                            >
-                              {video.title || 'Untitled'}
-                            </a>
-                          ) : (
-                            video.title || 'Untitled'
-                          )}
+                          {video.title || 'Untitled'}
                         </h3>
                         {video.description && (
                           <p className="video-description">{video.description}</p>
@@ -153,6 +279,12 @@ function App() {
           </div>
         )}
       </main>
+
+      <VideoModal
+        video={selectedVideo}
+        isOpen={!!selectedVideo}
+        onClose={() => setSelectedVideo(null)}
+      />
     </div>
   )
 }
