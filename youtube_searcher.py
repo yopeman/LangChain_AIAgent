@@ -14,17 +14,15 @@ from langchain_groq import ChatGroq
 from langchain_tavily import TavilySearch
 from youtube_search import YoutubeSearch
 from langchain_classic.globals import set_llm_cache
-from langchain_classic.cache import InMemoryCache
 from diskcache import Disk, Cache
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from ai_agent import AIAgent
-import json
 
 # =========================
 # Enable LLM Cache
 # =========================
-set_llm_cache(Cache("./disc_cache_files"))
+# set_llm_cache(Cache("./disc_cache_files"))
 
 # =========================
 # Tool Schemas
