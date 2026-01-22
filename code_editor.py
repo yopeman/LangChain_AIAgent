@@ -278,10 +278,11 @@ while True:
         break
 
     prompt = PromptTemplate.from_template(
-        "Context:\n{context}\n\nPrompt:\n{prompt}"
+        "Context:\n{context}\n\nAvailable tools:{tools}\n\nPrompt:\n{prompt}"
     ).format(
         context=history.items,
         prompt=user_input,
+        tools=tools
     )
 
     improved = agent.improve(prompt)
